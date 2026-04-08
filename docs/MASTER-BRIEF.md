@@ -699,3 +699,156 @@ async function runImport(parsed) {
 - The existing stat block text parser — extract into `parseStatBlockText()` shared utility, call from import tool
 - The 200px builder left sidebar (Sessions / Stat Blocks / Spells / NPCs nav) — keep exactly as-is
 - `stat_blocks`, `characters`, `character_states`, `campaign_state`, `music_tracks` — do not delete or modify
+
+---
+
+# Part 3 — Combat & Player App Bug Fixes
+
+These issues were identified during Session 1 playtest. Fix these after Parts 0–2 are stable, or tackle them in parallel with Issue #1 if the combat bugs are blocking session readiness.
+
+---
+
+## 3.1 Monster attacks do not reduce character HP on the player profile
+
+**What's happening:** When an enemy attacks a character and hits, the damage is logged in the rolls feed but the character's `cur_hp` in `character_states` is not being decremented. The player profile in the player app shows no HP change.
+
+**Expected behaviour:** Monster hit → damage calculated → `character_states.cur_hp` reduced by damage amount → player app reflects new HP via Realtime subscription within 1 second.
+
+**Where to look:**
+- The enemy attack roller (recently built — `index-Ch-MKV1a.js`) handles the attack roll and damage calculation
+- After a hit is confirmed, it needs to call `UPDATE character_states SET cur_hp = cur_hp - $damage WHERE id = $characterId`
+- Use the existing Supabase client — the same one used for all other `character_states` writes
+- If the character is already at 0 HP, set to 0 (no negative HP) and trigger death saves display on the player app
+
+**Note:** Also check that `combat_state.combatants` HP (if still tracked there) updates in sync. The goal is `character_states` as single source of truth — see §2.1 in ROADMAP.md.
+
+---
+
+## 3.2 Player attacks and rolls appear in the rolls feed but not in the combat log
+
+**What's happening:** When players make attacks or cast spells, the results appear in the DM-side rolls feed (`gh_shared.data.rolls`) but do not appear in the combat log panel visible to the DM during combat.
+
+**Expected behaviour:** Every player attack roll, damage roll, spell save, and spell effect should create an entry in the combat log in the DM console, ordered chronologically, showing: character name, action taken, roll result, outcome (hit/miss/save/fail), and damage dealt.
+
+**Where to look:**
+- Player attack actions write to `gh_shared` — check the exact field being written (`playerRolls`, `rolls`, or similar)
+- The DM combat log panel reads from a different source, or reads from `gh_shared` but filters incorrectly
+- Both player rolls and DM/enemy rolls should appear in a single unified combat log, not two separate feeds
+- The `combat_feed` table (currently 16 rows) may already be the intended destination — verify whether player actions write to it
+
+---
+
+## 3.3 Player view — sticky stats header with scrolling character sheet
+
+**What to build:** In the player app character sheet, the stats bar (HP, AC, Speed, Initiative, Proficiency Bonus, Spell Save DC) should be **sticky** — pinned to the top of the screen at all times during a session.
+
+**Detailed spec:**
+
+- **Sticky header strip** (always visible, top of screen):
+  - Character portrait — small circular thumbnail (32px) when scrolled down
+  - HP / max HP — prominent, live-updating
+  - AC, Speed, Initiative, Prof Bonus, Spell Save DC — compact mono display
+  - Background: `var(--bg-surface)`, `border-bottom: 1px solid var(--border-bright)`
+
+- **Scroll behaviour:**
+  - When the player scrolls **up** (toward the top of the sheet): the full-size portrait at the top of the character section collapses into the small thumbnail in the sticky header. Stats remain visible.
+  - When the player scrolls **back down** to the top: the large portrait reappears, the sticky header thumbnail disappears.
+  - Implement using `IntersectionObserver` on the large portrait element — when it leaves the viewport, swap to the thumbnail in the header.
+
+- **The rest of the character sheet** (spells, weapons, features, conditions, death saves) scrolls freely beneath the sticky header.
+
+- **Why:** On a phone at the table, players constantly scroll between their spell list and their HP. This keeps the critical stats always in view without sacrificing screen space.
+
+---
+
+## 3.4 Multi-target spell support — Bane and equivalents
+
+**The issue:** Bane currently targets only 1 monster. Per the rules (and confirmed in `src/data/spells-reference.json`), Bane affects **up to 3 creatures** of your choice (CHA Save each). The current implementation does not support selecting multiple targets.
+
+**Full list of current character spells that affect multiple chosen targets:**
+
+Cross-reference against `src/data/spells-reference.json` — look up each spell by name to get the exact description and target count.
+
+| Spell | Who has it | Max targets | Save | Notes |
+|---|---|---|---|---|
+| Bane | Dorothea, Ilya | 3 | CHA Save each | Dorothea can upcast: +1 target per slot level above 1st |
+| Bless | Dorothea, Ilya | 3 | None | Buff — targets willing allies |
+| Healing Word | Dorothea, Ilya | 1 | None | Single target, but Dorothea can cast bonus action |
+| Mass Healing Word | Dorothea (L3+) | 6 | None | Heal up to 6 creatures |
+| Aid | Ilya (L2) | 3 | None | HP increase for 3 targets |
+| Hypnotic Pattern | Kanan, Danil | AoE | WIS Save | Affects all in 30ft cube — AoE not multi-select |
+| Slow | Kanan (L3) | 6 | WIS Save each | All must save in 40ft cube |
+| Spirit Guardians | Ilya (L3) | AoE | WIS/CHA Save | Emanation — all enemies in range |
+
+**Implementation — multi-target spell UI:**
+
+When a player casts a spell with `max_targets > 1` (parsed from the spell description in `src/data/spells-reference.json`):
+
+1. Show a target selector: a list of all combatants in `combat_state.combatants` (enemies + allies as appropriate)
+2. Player checks up to `max_targets` boxes
+3. For each selected target that requires a save: roll the save automatically against the enemy's save modifier (if stored in their stat block) OR display a save prompt to the DM: "Bane — [Wolf 1] CHA Save DC 14"
+4. Apply effect to targets that fail the save, record result in combat log
+
+**Upcasting for Bane specifically:** Each slot level above 1st adds 1 target. At L2 slot = 4 targets, L3 slot = 5 targets, etc. Pull the upcast rule from `src/data/spells-reference.json` — it's in the description.
+
+---
+
+## 3.5 Monster saving throw responses for debuff spells
+
+**The issue:** When a player casts a spell that requires monsters to make a saving throw (Bane, Hypnotic Pattern, Slow, etc.), there is no mechanism in the DM console to resolve the save and apply the result. The spell is cast but nothing happens on the monster side.
+
+**What needs to exist:**
+
+**Step 1 — Save prompt in DM console combat tracker:**
+When a player casts a save-based spell, push a notification to the DM console combat tracker:
+
+```
+⚡ Bane cast by Dorothea
+   Targets: Wolf 1, Wolf 2, Rotting Bloom
+   CHA Save DC 14 each
+   [Wolf 1: Roll] [Wolf 2: Roll] [Rotting Bloom: Roll]
+```
+
+Each `[Roll]` button:
+- Rolls the appropriate save (look up the enemy's save modifier from their stat block in `stat_blocks` — CHA modifier, or proficient if listed in saving throws)
+- Displays the result: "Wolf 1 — rolled 8 (CHA -1) → **FAIL** (DC 14)"
+- On fail: applies the condition or debuff to that combatant in `combat_state.combatants`
+- On success: notes "resisted" and applies no effect
+
+**Step 2 — Condition tracking on monsters:**
+Enemy combatants in `combat_state.combatants` need a `conditions` array (same structure as `character_states.conditions`). When Bane lands on Wolf 1, add `"bane"` to `combatants[wolfIndex].conditions`.
+
+**Step 3 — Mechanical effect of the condition:**
+Baned enemies have `-1d4` to attack rolls and saving throws. In the enemy attack roller (recently built), check the combatant's conditions and apply modifiers:
+- `bane`: roll `1d4`, subtract from attack roll and any saves
+- `slow`: halved speed, -2 AC, -2 Dex saves, one action or bonus action (not both)
+- `frightened`: disadvantage on attack rolls (roll twice, take lower)
+
+**Spell-by-spell save requirements for current characters' offensive spells:**
+
+Pull descriptions from `src/data/spells-reference.json` for each. Key ones for current characters:
+
+| Spell | Caster(s) | Save | Effect on fail | Condition to track |
+|---|---|---|---|---|
+| Bane | Dorothea, Ilya | CHA | -1d4 to attacks and saves | `bane` |
+| Hypnotic Pattern | Kanan, Danil | WIS | Incapacitated, speed 0 | `incapacitated` |
+| Slow | Kanan (L3) | WIS | Halved speed, -2 AC/Dex, action restriction | `slow` |
+| Ray of Sickness | Kanan | CON | Poisoned until end of next turn | `poisoned` |
+| Inflict Wounds | Kanan, Ilya | None (attack roll) | Necrotic damage on hit | — |
+| Blindness/Deafness | Kanan | CON | Blinded or Deafened | `blinded` |
+| Guiding Bolt | Ilya | None (attack roll) | Radiant damage + advantage on next attack | `guiding_bolt` |
+| Toll the Dead | Kanan | WIS | Necrotic damage (d12 if already damaged) | — |
+| Vicious Mockery | Dorothea | WIS | Psychic damage + disadvantage on next attack | `vicious_mockery` |
+
+**Condition display:** When an enemy combatant has conditions, show them as coloured badges on their combat tracker card in the DM console — same visual pattern as the player condition badges.
+
+**Source of truth for save modifiers:** `stat_blocks.saving_throws` JSONB field already exists. If the enemy's stat block doesn't list a specific save proficiency, use the raw ability modifier (e.g. CHA -1 for a wolf with CHA 8).
+
+---
+
+## Implementation notes for Part 3
+
+- **Use `src/data/spells-reference.json`** for all spell targeting counts, save types, and descriptions. Do not hardcode these values — look them up dynamically by spell name.
+- **Multi-target spell parsing:** To determine if a spell is multi-target, search the description for the pattern `up to (\w+) (?:creature|target)`. The reference file already has this data cleanly.
+- **Condition system** should be consistent across characters and monsters — the same 14 conditions from `src/data/rules-glossary.json` (tagged `[Condition]`), plus any spell-specific short-term effects (e.g. `bane`, `guiding_bolt`, `vicious_mockery`).
+- **Do not break the enemy attack roller** built in the previous session — extend it, don't replace it.
