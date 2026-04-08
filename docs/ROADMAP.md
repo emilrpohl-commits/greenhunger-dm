@@ -126,14 +126,32 @@ The file `docs/Claude Brief 1.md` (uploaded by hand) and `docs/MASTER-BRIEF.md` 
 Subscribes to `character_states` Realtime so HP changes from player app are immediately visible.
 
 ### 5.2 PDF upload / level-up tool
-**Status:** Architecture designed. `characters` and `character_spells` tables built and seeded. Character data loads from Supabase in player app.
+**Status:** Architecture designed. `characters` and `character_spells` tables built and seeded. Character data loads from Supabase in player app. **`src/data/spells-reference.json` is now committed — 519 spells with full descriptions, covering every spell in the PHB and beyond.**
+
+**Data file:** `src/data/spells-reference.json`
+```js
+import spellsRef from '../data/spells-reference.json';
+
+// Look up a spell by name (case-insensitive)
+const ref = spellsRef.find(s => s.name.toLowerCase() === spellName.toLowerCase());
+// Returns: { name, level, school, casting_time, duration, range, area, attack, save,
+//            damage_effect, ritual, concentration, components, material_note, source, description }
+
+// Get all spells for a class by level
+const level3Spells = spellsRef.filter(s => s.level === 3);
+
+// Auto-populate description when adding a new spell
+const withDescription = { ...newSpell, description: ref?.description ?? '' };
+```
+
 **Work:** Add "Import from D&D Beyond PDF" button in a Characters panel in the DM console. Client-side PDF parsing using `PDF.js` or `pdf-parse`:
 1. Parse D&D Beyond PDF export (consistent format — level, ability scores, saving throws, skills, spell slots, features, weapons).
 2. Show diff view: "Level 4 → 5. Changes: HP 26→32, new spell slot L3×2, new feature: [X], new spell: [Y]."
 3. On confirm: `UPDATE characters SET level = $1, ... WHERE id = $2` + upsert changed spells in `character_spells`.
-4. Warn about spells with no description: "3 new spells added — descriptions need to be filled in."
+4. **For each new spell added:** look it up in `src/data/spells-reference.json` by name and auto-populate `description`, `school`, `casting_time`, `duration`, `range`, `concentration`, `ritual`, and `components`. This eliminates the manual description-filling step entirely.
+5. If a spell name from the PDF doesn't match any entry in the reference (e.g. a subclass-specific spell), flag it for manual entry.
 
-Note: spell descriptions are NOT in D&D Beyond PDF exports. New spells need descriptions added manually or from a reference table.
+Note: `src/data/spells-reference.json` contains all 519 spells from the PHB. Every spell the current characters have is confirmed present. All character spells across Dorothea, Kanan, Danil, and Ilya matched successfully against the reference.
 
 ### 5.3 Ilya character sheet — player app
 **Status:** Ilya seeded in `characters` and `character_states`. `is_active = false`. Sheet structure likely built but needs verification.
@@ -351,6 +369,8 @@ This is a security improvement, not a functional one — deprioritise until the 
 - `npcs.stat_block_id`
 - `scene_branches.target_scene_id`
 - `character_spells.character_id`
+
+**Spell reference data:** `src/data/spells-reference.json` (519 spells, all with full descriptions). Import client-side — no database calls needed. Use to auto-populate spell descriptions in the character spell editor, PDF level-up tool, and any spell picker UI.
 
 ---
 
