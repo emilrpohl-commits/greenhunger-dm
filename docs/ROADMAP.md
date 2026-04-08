@@ -9,9 +9,6 @@ Items are grouped by area, then ordered within each area by priority. Each item 
 
 ## Housekeeping (do first)
 
-### Delete `docs/MASTER-BRIEF.md`
-The file `docs/Claude Brief 1.md` (uploaded by hand) and `docs/MASTER-BRIEF.md` (committed by script) are identical. Delete `MASTER-BRIEF.md` to avoid confusion. Keep `Claude Brief 1.md` as the canonical brief name.
-
 ### Remove `.DS_Store` from repo
 `.DS_Store` is committed to the root of `greenhunger-dm`. Add a `.gitignore` with at minimum `**/.DS_Store` and remove the existing one.
 
