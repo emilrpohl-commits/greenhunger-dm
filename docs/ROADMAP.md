@@ -9,6 +9,9 @@ Items are grouped by area, then ordered within each area by priority. Each item 
 
 ## Housekeeping (do first)
 
+### Delete `docs/MASTER-BRIEF.md`
+The file `docs/Claude Brief 1.md` (uploaded by hand) and `docs/MASTER-BRIEF.md` (committed by script) are identical. Delete `MASTER-BRIEF.md` to avoid confusion. Keep `Claude Brief 1.md` as the canonical brief name.
+
 ### Remove `.DS_Store` from repo
 `.DS_Store` is committed to the root of `greenhunger-dm`. Add a `.gitignore` with at minimum `**/.DS_Store` and remove the existing one.
 
@@ -261,6 +264,25 @@ const results = glossary.filter(e =>
 ---
 
 ## 9. Player app improvements
+
+### 9.0 Skill check table rendering — DM console run mode
+**Status:** Partially done. Hardcoded sessions (Sessions 1–3 in the bundle) already render skill check beats as styled cards with a mono uppercase trigger label and amber italic result text — this looks correct. However, Supabase-backed beats (anything imported via the DOCX import tool or edited in the outliner) store `mechanical_effect` as a JSON string and the run-mode beat panel has no code to parse and display it as a table — it would render raw JSON.
+
+**Root cause:** Two separate content paths exist in the run-mode panel. The hardcoded sessions use explicit `trigger`/`text` fields per check. The Supabase path stores checks as a JSONB array in `mechanical_effect` and the panel does not parse it.
+
+**Work (small — contained to one component):**
+- In the run-mode beat panel, when rendering a `check` or `prompt` beat loaded from Supabase:
+  1. Attempt `JSON.parse(beat.mechanical_effect)`
+  2. If it parses as an array of `{ trigger, skill, dc, result }` objects, render using the **existing** combat prompt card style already in the bundle — mono uppercase trigger label, skill + DC inline in `var(--text-muted)`, result text in `#d4a080` italic
+  3. If `JSON.parse` fails (legacy plain text value), fall back to rendering the raw string as before
+- No new visual style needed — reuse the existing `combatPrompts` card pattern exactly
+- The beat editor skill check table (Part 1 of the master brief) writes the correct JSONB format — once both are built, the full round-trip works
+
+**Impact:** Without this, every DOCX-imported skill check beat will show raw JSON in run mode. With it, they render as clean, readable cards matching the existing hardcoded session style.
+
+**Priority:** Do this as part of the Part 1 outliner build (master brief), not as a separate task — the beat editor and the run-mode display are built together.
+
+---
 
 ### 9.1 Party view
 **Status:** Party view was removed from the login screen. Unclear if it exists elsewhere.
