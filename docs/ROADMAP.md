@@ -182,45 +182,125 @@ Note: spell descriptions are NOT in D&D Beyond PDF exports. New spells need desc
 
 ---
 
-## 8. Player app improvements
+## 8. Rules reference & glossary
 
-### 8.1 Party view
-**Status:** Party view was removed from the login screen. Unclear if it exists elsewhere.
-**Work:** Decide whether to reinstate a party overview screen (shows all four characters' HP, conditions, spell slots) as a selectable "view" in the player app. Most useful in combat when a player wants to see the full party state without switching characters.
+### 8.0 Rules glossary — what it is and what it enables
+**Status:** Parsed and committed. `src/data/rules-glossary.json` in `greenhunger-dm` contains 155 entries from the 2024 D&D rules glossary — all core rules terms, all 14 conditions, all action types, all area-of-effect shapes, all hazard types, damage types, and creature types. Each entry has a `term` and `definition` field. Entries are tagged where relevant (e.g. `Blinded [Condition]`, `Dash [Action]`, `Burning [Hazard]`) to allow category filtering.
 
-### 8.2 Death saves UI
-**Status:** `character_states.death_saves` tracked in Supabase. UI built but unclear whether the 0HP / unconscious state is handled gracefully.
-**Work:** When `cur_hp = 0`, show the death saves panel prominently on the character sheet. Successes/failures should be tappable directly. DM console roster panel should show a visual indicator for any character at 0 HP.
+**Data file:** `src/data/rules-glossary.json`
+```json
+[
+  { "term": "Blinded [Condition]", "definition": "A Blinded creature can't see and automatically fails any ability check that requires sight. Attack rolls against the creature have Advantage, and the creature's attack rolls have Disadvantage." },
+  { "term": "Concentration", "definition": "Some spells and other effects require Concentration to remain active..." },
+  ...
+]
+```
 
-### 8.3 Spell slot sync between `character_states` and `characters`
-**Status:** `character_states.spell_slots` tracks used slots. `characters.spell_slots` (via `stats` JSONB) tracks max slots. These need to stay in sync as characters level up.
-**Work:** Ensure level-up (via PDF upload) updates `characters` max spell slots, and that the player app correctly reads max from `characters` and used from `character_states` — not mixing up the two.
+**Import in components:**
+```js
+import glossary from '../data/rules-glossary.json';
 
-### 8.4 Condition tooltips
-**Status:** Conditions display as badges. No descriptions.
-**Work:** On tap/click of a condition badge in the player app, show a brief tooltip or popover with the 5e condition description (e.g. "Poisoned: disadvantage on attack rolls and ability checks"). Hardcode the standard 5e conditions — no database needed.
+// Get all conditions
+const conditions = glossary.filter(e => e.term.includes('[Condition]'));
+
+// Lookup a specific term
+const entry = glossary.find(e => e.term.toLowerCase().startsWith('concentration'));
+
+// Search
+const results = glossary.filter(e =>
+  e.term.toLowerCase().includes(query.toLowerCase()) ||
+  e.definition.toLowerCase().includes(query.toLowerCase())
+);
+```
 
 ---
 
-## 9. Stat blocks & encounters
+### 8.1 DM rules lookup panel — DM console
+**Status:** Data ready. No UI built.
+**What it does:** A floating search panel in the DM console topbar (keyboard shortcut `?` or a `[?]` button). Type any rules term and the matching glossary entry surfaces instantly — without leaving the app. Critical for mid-session rulings on grappling, conditions, cover, opportunity attacks, etc.
 
-### 9.1 Portrait image upload in stat block creator
+**Implementation:**
+- Import `src/data/rules-glossary.json`
+- A `<RulesLookup>` component: a small modal or slide-in panel triggered by `?` keydown or button click
+- Text input with live filtering against both `term` and `definition` fields
+- Results list: term as heading, definition as body text. Max 5 results shown.
+- Category filter chips: All / Conditions / Actions / Areas of Effect / Hazards (filter by tag in `[brackets]`)
+- Close on Escape or click-outside
+- No database calls — purely client-side, instant
+
+**Suggested placement:** Top-right of the DM console topbar, next to the PREP/LIVE toggle. A small `[?]` button that opens the panel.
+
+### 8.2 Condition tooltips — player app
+**Status:** Data ready. Conditions display as badges with no descriptions.
+**What it does:** When a player taps a condition badge on their character sheet (e.g. "Poisoned", "Grappled"), a popover appears with the full mechanical definition from the glossary. Eliminates "what does Restrained actually do?" questions mid-combat.
+
+**Implementation:**
+- Import `src/data/rules-glossary.json` in the player app (`greenhunger-players`)
+- When rendering a condition badge, look up the matching entry:
+  ```js
+  const entry = glossary.find(e => e.term.toLowerCase().startsWith(conditionName.toLowerCase()));
+  ```
+- On tap/click: show a small popover anchored to the badge with `entry.definition`
+- Popover dismisses on tap-outside or second tap
+- All 14 conditions are in the glossary: Blinded, Charmed, Deafened, Exhaustion, Frightened, Grappled, Incapacitated, Invisible, Paralyzed, Petrified, Poisoned, Prone, Restrained, Stunned, Unconscious
+- Style to match existing badge colours — popover background `var(--bg-surface)`, border `var(--border-bright)`, text `var(--text-primary)`
+
+### 8.3 Stat block condition cross-references — DM console
+**Status:** Data ready. Stat block descriptions reference conditions by name (e.g. "target is Poisoned") as plain text.
+**What it does:** In the combat tracker and stat block viewer, condition names mentioned in ability descriptions become tappable — clicking one opens the same glossary popover as §8.2. Keeps the DM from having to context-switch when a new status effect is applied.
+
+**Implementation:**
+- A `<GlossaryLink>` component that wraps condition/action names in stat block text
+- Use a regex to detect known glossary terms in any string of stat block text:
+  ```js
+  const CONDITION_NAMES = glossary
+    .filter(e => e.term.includes('[Condition]'))
+    .map(e => e.term.replace(' [Condition]', ''));
+  // Regex: match any condition name as a word boundary
+  ```
+- Replace matched terms with tappable `<GlossaryLink term={name}>` spans
+- Shares the same popover component as §8.2
+
+---
+
+## 9. Player app improvements
+
+### 9.1 Party view
+**Status:** Party view was removed from the login screen. Unclear if it exists elsewhere.
+**Work:** Decide whether to reinstate a party overview screen (shows all four characters' HP, conditions, spell slots) as a selectable "view" in the player app. Most useful in combat when a player wants to see the full party state without switching characters.
+
+### 9.2 Death saves UI
+**Status:** `character_states.death_saves` tracked in Supabase. UI built but unclear whether the 0HP / unconscious state is handled gracefully.
+**Work:** When `cur_hp = 0`, show the death saves panel prominently on the character sheet. Successes/failures should be tappable directly. DM console roster panel should show a visual indicator for any character at 0 HP.
+
+### 9.3 Spell slot sync between `character_states` and `characters`
+**Status:** `character_states.spell_slots` tracks used slots. `characters.spell_slots` (via `stats` JSONB) tracks max slots. These need to stay in sync as characters level up.
+**Work:** Ensure level-up (via PDF upload) updates `characters` max spell slots, and that the player app correctly reads max from `characters` and used from `character_states` — not mixing up the two.
+
+### 9.4 Condition tooltips
+**Status:** Superseded by §8.2 above — data is now in `src/data/rules-glossary.json`. See §8.2 for implementation spec.
+
+---
+
+## 10. Stat blocks & encounters
+
+### 10.1 Portrait image upload in stat block creator
 **Status:** Stat block image upload currently uses `FileReader` base64 inline encoding rather than Supabase Storage. Portrait is stored as a data URL in the database.
 **Work:** Switch to `supabase.storage.from('assets').upload('portraits/{slug}.jpg', file, { upsert: true })` then `getPublicUrl()`. Populate `portrait_url` with the storage URL. Show preview thumbnail. The bucket is public, anon key has INSERT permission.
 
-### 9.2 Encounter pre-sets
+### 10.2 Encounter pre-sets
 **Status:** `encounters` table designed (participants JSONB, terrain, hazards, objectives, tactics, scaling, rewards) — 0 rows.
 **Work:** Add an encounter builder to the DM console stat blocks area. Pre-build encounter compositions (e.g. "3× Rotting Bloom", "Damir + web chamber") and save to `encounters`. In run mode, "Load encounter" button pulls combatants directly into the combat tracker from a saved encounter rather than adding them one at a time.
 
 ---
 
-## 10. Infrastructure & reliability
+## 11. Infrastructure & reliability
 
-### 10.1 Migration history
+### 11.1 Migration history
 **Status:** 8 migrations tracked in Supabase. All schema changes we made today are tracked. Schema before today was applied directly with no migration history.
 **Work:** Export the current full DDL as a baseline migration (`supabase/migrations/0000_baseline.sql`) and commit to `greenhunger-dm` so the schema is reproducible. Add `supabase/` to `.gitignore` exclusions if needed.
 
-### 10.2 `gh_shared` cleanup
+### 11.2 `gh_shared` cleanup
 **Status:** `gh_shared` is a single-row JSON blob acting as a second database — contains roll log, HP, spell slots, session summaries, unlocked lore cards, active monsters, initiative state. It was a fast workaround and has grown large.
 **Work:** Audit what's in `gh_shared` that hasn't been migrated to proper tables. Migrate each piece:
 - `playerHp`, `spellSlots`, `deathSaves` → already in `character_states` — remove from `gh_shared`
@@ -231,11 +311,11 @@ Note: spell descriptions are NOT in D&D Beyond PDF exports. New spells need desc
 - `combatActive`, `combatRound` → already in `combat_state`
 Once migrated, `gh_shared` should only contain the roll log (ephemeral per-session data that doesn't need to persist). Eventually it can be removed entirely.
 
-### 10.3 Orphaned `is_active` and `player_name` in `character_states`
+### 11.3 Orphaned `is_active` and `player_name` in `character_states`
 **Status:** These columns were added to `character_states` before we moved character data to the `characters` table. The app now correctly reads from `characters`. The `character_states` versions are orphaned.
 **Work:** Remove `is_active` and `player_name` from `character_states` in a migration. Confirm the app has no remaining references to `character_states.is_active` or `character_states.player_name` before doing so.
 
-### 10.4 RLS tightening (deferred from earlier)
+### 11.4 RLS tightening (deferred from earlier)
 **Status:** All tables have `USING (true)` blanket policies — any anon client can read/write everything. We attempted to tighten these earlier but reverted to avoid breaking the DM console.
 **Work:** Once the DM console uses proper auth (or at minimum a session secret rather than the anon key), tighten RLS on mutable tables:
 - `session_state`, `combat_state`, `gh_shared`: UPDATE only on known singleton row IDs
@@ -243,7 +323,7 @@ Once migrated, `gh_shared` should only contain the roll log (ephemeral per-sessi
 - `character_states`: UPDATE only (no INSERT, no DELETE — rows are pre-seeded)
 This is a security improvement, not a functional one — deprioritise until the app is otherwise stable.
 
-### 10.5 Performance indexes
+### 11.5 Performance indexes
 **Status:** Several foreign keys have no covering index. At current data volumes this is irrelevant, but worth adding before the schema grows.
 **Work:** Add indexes on:
 - `consequences.branch_id`
@@ -265,6 +345,7 @@ For reference, here is how these items stack up against each other for session r
 - §3.1 Green Mark display — player app
 - §3.2 Green Mark tracker — DM console
 - §1.2 Prep mode functional
+- §8.2 Condition tooltips — player app (data already in `src/data/rules-glossary.json`)
 
 ### Before Session 3 (high value)
 - §2.3 Combat portraits on combatant cards
@@ -273,19 +354,21 @@ For reference, here is how these items stack up against each other for session r
 - §4.1 Music player
 - §6.1 Lore reveal — end-to-end wiring
 - §3.3 Campaign state / tension clocks
+- §8.1 DM rules lookup panel (data already in `src/data/rules-glossary.json`)
 
 ### Long campaign (build out over time)
 - §5.2 PDF level-up tool
 - §4.2 Scene atmosphere panel
 - §7.1 NPC quick-reference panel
 - §6.2 Asset reveal system
-- §9.2 Encounter pre-sets
-- §10.2 `gh_shared` cleanup
-- §10.1 Migration history baseline
+- §10.2 Encounter pre-sets
+- §11.2 `gh_shared` cleanup
+- §11.1 Migration history baseline
+- §8.3 Stat block condition cross-references
 
 ### Maintenance (do when convenient)
-- §10.3 Orphaned columns in `character_states`
-- §10.4 RLS tightening
-- §10.5 Performance indexes
-- §8.3 Spell slot sync
+- §11.3 Orphaned columns in `character_states`
+- §11.4 RLS tightening
+- §11.5 Performance indexes
+- §9.3 Spell slot sync
 - Housekeeping (`.DS_Store`, duplicate brief file)
